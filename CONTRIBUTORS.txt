@@ -224,5 +224,9 @@ In chronological order:
 * Tom White <s6yg1ez3@mail2tor.com>
   * Made SOCKS handler differentiate socks5h from socks5 and socks4a from socks4.
 
+* Noam Meltzer <tsnoam@gmail.com>
+  * Fixed not setting connect timeout on HTTP connections.
+  * Fixed incorrect timeout on socket when using a new HTTPS connection.
+
 * [Your name or handle] <[email or website]>
   * [Brief summary of your changes]
