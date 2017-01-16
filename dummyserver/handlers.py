@@ -6,6 +6,7 @@ import gzip
 import json
 import logging
 import sys
+import threading
 import time
 import zlib
 
@@ -60,6 +61,8 @@ class TestingApp(RequestHandler):
     it exists. Status code 200 indicates success, 400 indicates failure. Each
     method has its own conditions for success/failure.
     """
+    block_response_event = None
+
     def get(self):
         """ Handle GET requests """
         self._call_method()
@@ -82,6 +85,15 @@ class TestingApp(RequestHandler):
 
     def _call_method(self):
         """ Call the correct method in this class based on the incoming URI """
+        if hasattr(self.block_response_event, 'wait'):
+            self.block_response_event.wait()
+            try:
+                self.block_response_event.clear()
+            except AttributeError:
+                pass
+        elif self.block_response_event is not None:
+            time.sleep(self.block_response_event)
+
         req = self.request
         req.params = {}
         for k, v in req.arguments.items():

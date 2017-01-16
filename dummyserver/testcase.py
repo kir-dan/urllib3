@@ -45,13 +45,16 @@ class SocketDummyServerTestCase(unittest.TestCase):
         cls.port = cls.server_thread.port
 
     @classmethod
-    def start_response_handler(cls, response, num=1, block_send=None):
+    def start_response_handler(cls, response, num=1, block_send=None, block_accept=None):
         ready_event = threading.Event()
 
         def socket_handler(listener):
             for _ in range(num):
                 ready_event.set()
 
+                if block_accept:
+                    block_accept.wait()
+                    block_accept.clear()
                 sock = listener.accept()[0]
                 consume_socket(sock)
                 if block_send:
@@ -119,11 +122,18 @@ class HTTPDummyServerTestCase(unittest.TestCase):
         cls.server_thread.join()
 
     @classmethod
+    def set_block_response(cls, event):
+        TestingApp.block_response_event = event
+
+    @classmethod
     def setUpClass(cls):
         cls._start_server()
 
     @classmethod
     def tearDownClass(cls):
+        if hasattr(TestingApp.block_response_event, 'set'):
+            TestingApp.block_response_event.set()
+        cls.set_block_response(None)
         cls._stop_server()
 
 
