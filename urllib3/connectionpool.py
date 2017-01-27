@@ -22,6 +22,7 @@ from .exceptions import (
     TimeoutError,
     InsecureRequestWarning,
     NewConnectionError,
+    ConnectTimeoutError,
 )
 from .packages.ssl_match_hostname import CertificateError
 from .packages import six
@@ -303,22 +304,34 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             # can be removed later
             return Timeout.from_float(timeout)
 
-    def _raise_timeout(self, err, url, timeout_value):
+    def _raise_timeout(self, err, url, timeout_value, exc_cls):
         """Is the error actually a timeout? Will raise a ReadTimeout or pass"""
 
+        # exc_cls is either ReadTimeoutError or ConnectTimeoutError
+        # Only ReadTimeoutError requires the url (preserving old behaviour)
+        args = [self]
+        if exc_cls is ReadTimeoutError:
+            args.append(url)
+            desc = 'Read'
+        else:
+            desc = 'Connect'
+
         if isinstance(err, SocketTimeout):
-            raise ReadTimeoutError(self, url, "Read timed out. (read timeout=%s)" % timeout_value)
+            args.append("%s timed out. (%s timeout=%s)" % (desc, desc.lower(), timeout_value))
+            raise exc_cls(*args)
 
         # See the above comment about EAGAIN in Python 3. In Python 2 we have
         # to specifically catch it and throw the timeout error
-        if hasattr(err, 'errno') and err.errno in _blocking_errnos:
-            raise ReadTimeoutError(self, url, "Read timed out. (read timeout=%s)" % timeout_value)
+        elif hasattr(err, 'errno') and err.errno in _blocking_errnos:
+            args.append("%s timed out. (%s timeout=%s)" % (desc, desc.lower(), timeout_value))
+            raise exc_cls(*args)
 
         # Catch possible read timeouts thrown as SSL errors. If not the
         # case, rethrow the original. We need to do this because of:
         # http://bugs.python.org/issue10272
-        if 'timed out' in str(err) or 'did not complete (read)' in str(err):  # Python 2.6
-            raise ReadTimeoutError(self, url, "Read timed out. (read timeout=%s)" % timeout_value)
+        elif 'timed out' in str(err) or 'did not complete (read)' in str(err):  # Python 2.6
+            args.append("%s timed out. (%s timeout=%s)" % (desc, desc.lower(), timeout_value))
+            raise exc_cls(*args)
 
     def _make_request(self, conn, method, url, timeout=_Default, chunked=False,
                       **httplib_request_kw):
@@ -347,7 +360,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             self._validate_conn(conn)
         except (SocketTimeout, BaseSSLError) as e:
             # Py2 raises this as a BaseSSLError, Py3 raises it as socket timeout.
-            self._raise_timeout(err=e, url=url, timeout_value=conn.timeout)
+            self._raise_timeout(err=e, url=url, timeout_value=conn.timeout,
+                                exc_cls=ConnectTimeoutError)
             raise
 
         # Reset the timeout for the recv() on the socket
@@ -387,7 +401,8 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
                     # otherwise it looks like a programming error was the cause.
                     six.raise_from(e, None)
         except (SocketTimeout, BaseSSLError, SocketError) as e:
-            self._raise_timeout(err=e, url=url, timeout_value=read_timeout)
+            self._raise_timeout(err=e, url=url, timeout_value=read_timeout,
+                                exc_cls=ReadTimeoutError)
             raise
 
         # AppEngine doesn't have a version attr.
