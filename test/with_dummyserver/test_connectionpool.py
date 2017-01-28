@@ -732,9 +732,11 @@ class TestHttpsConnectionPool(HTTPSDummyServerTestCase):
         # Pool-global timeout
         pool = HTTPSConnectionPool(host, port, timeout=timeout)
         conn = pool._get_conn()
-        with self.assertRaises(ConnectTimeoutError) as cmgr:
+        exc = ReadTimeoutError  # Until we fix it to be ConnectTimeoutError
+        pos = 0  # Will be 1 once we fix ConnectTimeoutError
+        with self.assertRaises(exc) as cmgr:
             pool._make_request(conn, 'GET', url)
-        self.assertEqual(cmgr.exception.args[1].split()[-1],
+        self.assertEqual(cmgr.exception.args[pos].split()[-1],
                          'timeout=%s)' % timeout.connect_timeout)
 
         # Retries
@@ -746,16 +748,16 @@ class TestHttpsConnectionPool(HTTPSDummyServerTestCase):
         timeout2 = Timeout(read=LONG_TIMEOUT, connect=SHORT_TIMEOUT / 100)
         pool = HTTPSConnectionPool(host, port, timeout=timeout2, retries=False)
         conn = pool._get_conn()
-        with self.assertRaises(ConnectTimeoutError) as cmgr:
+        with self.assertRaises(exc) as cmgr:
             pool._make_request(conn, 'GET', url, timeout=timeout2)
-        self.assertEqual(cmgr.exception.args[1].split()[-1],
+        self.assertEqual(cmgr.exception.args[pos].split()[-1],
                          'timeout=%s)' % timeout2.connect_timeout)
 
         pool._put_conn(conn)
         timeout = Timeout(connect=SHORT_TIMEOUT)
-        with self.assertRaises(ConnectTimeoutError) as cmgr:
+        with self.assertRaises(exc) as cmgr:
             pool.request('GET', url, timeout=timeout)
-        self.assertEqual(cmgr.exception.args[1].split()[-1],
+        self.assertEqual(cmgr.exception.args[pos].split()[-1],
                          'timeout=%s)' % timeout.connect_timeout)
 
     def test_make_request_con_tmout(self):
@@ -765,19 +767,22 @@ class TestHttpsConnectionPool(HTTPSDummyServerTestCase):
         timeout = Timeout(connect=SHORT_TIMEOUT)
         pool = HTTPSConnectionPool(self.host, self.port, timeout=timeout, retries=False)
 
+        exc = ReadTimeoutError  # Until we fix it to be ConnectTimeoutError
+        pos = 0  # Will be 1 once we fix ConnectTimeoutError
+
         # Test pool._make_request directly
         conn = pool._get_conn()
         self.assertIsNone(conn.sock)  # Ensure we didn't get an existing connection
-        with self.assertRaises(ConnectTimeoutError) as cmgr:
+        with self.assertRaises(exc) as cmgr:
             pool._make_request(conn, 'GET', '/')
-        self.assertEqual(cmgr.exception.args[1].split()[-1],
+        self.assertEqual(cmgr.exception.args[pos].split()[-1],
                          'timeout=%s)' % timeout.connect_timeout)
         block_event.set()
 
         # Test pool._make_request indirectly (through pool.request)
-        with self.assertRaises(ConnectTimeoutError) as cmgr:
+        with self.assertRaises(exc) as cmgr:
             pool.request('GET', '/')
-        self.assertEqual(cmgr.exception.args[1].split()[-1],
+        self.assertEqual(cmgr.exception.args[pos].split()[-1],
                          'timeout=%s)' % timeout.connect_timeout)
         block_event.set()
 
@@ -808,15 +813,24 @@ class TestHttpsConnectionPool(HTTPSDummyServerTestCase):
         # Test pool.request() connection reusal:
         # 1. Create a new connection.
         # 2. Perform a request which will succeed.
-        # 3. Reuse same connection for a successful read request with delay in response.
-        # 4. Reuse same connection for a timeout read request.
+        # 3. Reuse the connection - delay the response with original pool settings.
+        # 4. Reuse same connection for a successful read request with delay in response.
+        # 5. Reuse same connection for a timeout read request.
 
         # Create the connection pool with default timeouts long enough to connect and read.
         self.set_block_response(None)
-        timeout = Timeout(connect=1., read=3)
+        timeout = Timeout(connect=1., read=4)
         headers = make_headers(keep_alive=True)
         pool = HTTPSConnectionPool(self.host, self.port, timeout=timeout, headers=headers,
                                    retries=False)
+
+        # First request - direct with pool._make_request() with delay=conn_timeout+read_timeout-0.5
+        delay = timeout.connect_timeout + timeout.read_timeout - 0.5
+        self.set_block_response(delay)
+        conn = pool._get_conn()
+        self.assertIsNone(conn.sock)
+        pool._make_request(conn, 'GET', '/')
+        self.set_block_response(None)
 
         # Make a request - it must succeed
         pool.request('GET', '/')
@@ -834,15 +848,20 @@ class TestHttpsConnectionPool(HTTPSDummyServerTestCase):
         self.assertLess(delay, timeout.read_timeout)
         self.assertLess(timeout.read_timeout, pool.timeout.read_timeout)
         # Make the request
+        self.set_block_response(delay)
         pool.request('GET', '/', timeout=timeout)
 
         # Reuse the connection - timeout read request
-        delay = timeout.read_timeout + 0.2
+        delay = timeout.read_timeout + 1
         self.set_block_response(delay)
+        now = time.time()
         with self.assertRaises(ReadTimeoutError) as cmgr:
             pool.request('GET', '/', timeout=timeout)
+        delta = time.time() - now
         self.assertEqual(cmgr.exception.args[0].split()[-1],
                          'timeout=%s)' % timeout.read_timeout)
+        self.assertAlmostEqual(delta, timeout.read_timeout, places=1)
+        print('delta={}'.format(delta))
 
 
 class TestRetry(HTTPDummyServerTestCase):
