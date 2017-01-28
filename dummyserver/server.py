@@ -77,8 +77,8 @@ def _has_ipv6(host):
 # properly. We can not count that localhost will resolve to ::1 on all
 # systems. See https://github.com/shazow/urllib3/pull/611 and
 # https://bugs.python.org/issue18792
-HAS_IPV6_AND_DNS = _has_ipv6('localhost')
-HAS_IPV6 = _has_ipv6('::1')
+HAS_IPV6_AND_DNS = False # _has_ipv6('localhost')
+HAS_IPV6 = False # _has_ipv6('::1')
 
 
 # Different types of servers we have:
