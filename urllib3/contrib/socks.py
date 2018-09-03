@@ -161,6 +161,11 @@ class SOCKSProxyManager(PoolManager):
             )
 
         self.proxy_url = proxy_url
+        
+        if username is None and password is None and parsed.auth is not None:
+            split = parsed.auth.split(':')
+            if len(split) == 2:
+                username, password = split
 
         socks_options = {
             'socks_version': socks_version,
